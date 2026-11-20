@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from "next/link";
@@ -11,6 +12,7 @@ import {
   BarChart3,
   Settings,
   Store,
+  TicketPercent,
 } from "lucide-react";
 
 const navigation = [
@@ -40,6 +42,11 @@ const navigation = [
     icon: Warehouse,
   },
   {
+    name: "Promotions",
+    href: "/promotions",
+    icon: TicketPercent,
+  },
+  {
     name: "Analytics",
     href: "/analytics",
     icon: BarChart3,
@@ -56,6 +63,7 @@ export default function Sidebar() {
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 min-w-0 border-r border-[#DED7CB] bg-[#173F35] lg:flex lg:flex-col">
+
       {/* LOGO */}
       <div className="flex h-20 items-center gap-3 border-b border-white/10 px-6">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#E7EFEA] text-[#173F35]">
@@ -64,17 +72,17 @@ export default function Sidebar() {
 
         <div>
           <h1 className="text-lg font-bold tracking-tight text-white">
-           PrimeCart
+            PrimeCart
           </h1>
 
           <p className="text-[11px] text-white/55">
-           Store
+            Store
           </p>
         </div>
       </div>
 
       {/* NAVIGATION */}
-      <nav className="flex-1 px-4 py-6">
+      <nav className="flex-1 overflow-y-auto px-4 py-6">
         <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-white/40">
           Main Menu
         </p>

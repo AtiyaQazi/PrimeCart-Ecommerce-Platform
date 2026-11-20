@@ -1,3 +1,4 @@
+
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +20,9 @@ import {
 import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
+import CouponBox, {
+  type AppliedCoupon,
+} from "@/components/checkout/CouponBox";
 
 type Product = {
   id: string;
@@ -71,13 +75,12 @@ const formatPrice = (amount: number) =>
 
 function getStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
+
   return value.filter(
     (item): item is string =>
       typeof item === "string" && item.trim().length > 0
   );
 }
-
-
 
 function normalizeColorStocks(
   value: unknown,
@@ -97,10 +100,7 @@ function normalizeColorStocks(
 
         return {
           color: row.color.trim() || "Default",
-          stock: Math.max(
-            0,
-            Math.floor(Number(row.stock) || 0)
-          ),
+          stock: Math.max(0, Math.floor(Number(row.stock) || 0)),
         };
       });
 
@@ -118,48 +118,35 @@ function normalizeColorStocks(
     if (unique.length > 0) return unique;
   }
 
-  const colors = fallbackColors.length
-    ? fallbackColors
-    : ["Default"];
+  const colors = fallbackColors.length ? fallbackColors : ["Default"];
 
-  // Legacy product with one color: its existing total stock
-  // can safely be assigned to that one color.
   if (colors.length === 1) {
     return [
       {
         color: colors[0].trim() || "Default",
-        stock: Math.max(
-          0,
-          Math.floor(Number(fallbackStock) || 0)
-        ),
+        stock: Math.max(0, Math.floor(Number(fallbackStock) || 0)),
       },
     ];
   }
+
   return colors.map((color) => ({
     color: color.trim() || "Default",
     stock: 0,
   }));
 }
 
-
-function getVariantStock(item: Pick<Product, "stock" | "colorStocks" | "colors"> & { selectedColor?: string }) {
-  const color = item.selectedColor || item.colors[0] || "Default";
-  return item.colorStocks?.find((entry) => entry.color.toLowerCase() === color.toLowerCase())?.stock ?? 0;
-}
-
-function getProductImage(data: Record<string, unknown>): string {
-  const value =
-    data.image ??
-    data.imageUrl ??
-    data.imageURL ??
-    data.photoURL ??
-    data.thumbnail;
-
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
+function getVariantStock(
+  item: Pick<Product, "stock" | "colorStocks" | "colors"> & {
+    selectedColor?: string;
   }
+) {
+  const color = item.selectedColor || item.colors[0] || "Default";
 
-  return getStringArray(data.images)[0] ?? "";
+  return (
+    item.colorStocks?.find(
+      (entry) => entry.color.toLowerCase() === color.toLowerCase()
+    )?.stock ?? 0
+  );
 }
 
 function readCart(): CartItem[] {
@@ -167,9 +154,11 @@ function readCart(): CartItem[] {
 
   try {
     const saved = localStorage.getItem(CART_KEY);
+
     if (!saved) return [];
 
     const parsed: unknown = JSON.parse(saved);
+
     if (!Array.isArray(parsed)) return [];
 
     return parsed.filter(
@@ -190,6 +179,7 @@ function readCart(): CartItem[] {
 
 function saveCart(items: CartItem[]) {
   if (typeof window === "undefined") return;
+
   localStorage.setItem(CART_KEY, JSON.stringify(items));
 }
 
@@ -248,11 +238,13 @@ function normalizeMobileNumber(value: string): string {
   const cleaned = value.replace(/[^\d+]/g, "");
   const hasPlus = cleaned.startsWith("+");
   const digits = cleaned.replace(/\+/g, "");
+
   return hasPlus ? `+${digits}` : digits;
 }
 
 function isValidPakistanMobileNumber(value: string): boolean {
   const normalized = value.replace(/[\s()-]/g, "");
+
   return /^(?:03\d{9}|\+?923\d{9})$/.test(normalized);
 }
 
@@ -351,7 +343,6 @@ export default function ProductDetailsPage() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
 
-  // Buy Now uses separate checkout items and never overwrites the saved cart.
   const [checkoutItems, setCheckoutItems] = useState<CartItem[]>([]);
   const [checkoutMode, setCheckoutMode] = useState<CheckoutMode>("cart");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -360,6 +351,10 @@ export default function ProductDetailsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
   const [form, setForm] = useState<CheckoutForm>(initialForm);
+
+  // Coupon state
+  const [appliedCoupon, setAppliedCoupon] =
+    useState<AppliedCoupon | null>(null);
 
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [confirmedOrder, setConfirmedOrder] =
@@ -389,22 +384,43 @@ export default function ProductDetailsPage() {
     [checkoutItems]
   );
 
-  const selectedColorStock = product ? getVariantStock({ ...product, selectedColor }) : 0;
+  // Calculate percentage or fixed discount.
+  const checkoutDiscount = useMemo(() => {
+    if (!appliedCoupon) return 0;
+
+    if (appliedCoupon.type === "percentage") {
+      return Math.min(
+        checkoutSubtotal,
+        (checkoutSubtotal * appliedCoupon.value) / 100
+      );
+    }
+
+    return Math.min(checkoutSubtotal, appliedCoupon.value);
+  }, [appliedCoupon, checkoutSubtotal]);
+
+  const checkoutTotal = Math.max(
+    0,
+    checkoutSubtotal - checkoutDiscount
+  );
+
+  const selectedColorStock = product
+    ? getVariantStock({ ...product, selectedColor })
+    : 0;
 
   const selectedImageIndex = useMemo(
     () => Math.max(0, product?.images.indexOf(selectedImage) ?? 0),
     [product, selectedImage]
   );
 
-function changeGalleryImage(direction: number) {
-  if (!product || product.images.length < 2) return;
+  function changeGalleryImage(direction: number) {
+    if (!product || product.images.length < 2) return;
 
-  const nextIndex = selectedImageIndex + direction;
+    const nextIndex = selectedImageIndex + direction;
 
-  if (nextIndex < 0 || nextIndex >= product.images.length) return;
+    if (nextIndex < 0 || nextIndex >= product.images.length) return;
 
-  setSelectedImage(product.images[nextIndex]);
-}
+    setSelectedImage(product.images[nextIndex]);
+  }
 
   function handleGalleryTouchStart(
     event: React.TouchEvent<HTMLDivElement>
@@ -462,39 +478,45 @@ function changeGalleryImage(direction: number) {
             throw new Error("This product has invalid pricing or stock data.");
           }
 
-          // Supports both legacy `image` and the newer `images` array.
-          // Remove duplicates and display a maximum of four images.
-      const imageCandidates = [
-  data.image,
-  data.imageUrl,
-  data.imageURL,
-  data.photoURL,
-  data.thumbnail,
-  ...getStringArray(data.images),
-  ...getStringArray(data.imageLinks),
-  ...getStringArray(data.imageUrls),
-  ...getStringArray(data.productImages),
-];
+          const imageCandidates = [
+            data.image,
+            data.imageUrl,
+            data.imageURL,
+            data.photoURL,
+            data.thumbnail,
+            ...getStringArray(data.images),
+            ...getStringArray(data.imageLinks),
+            ...getStringArray(data.imageUrls),
+            ...getStringArray(data.productImages),
+          ];
 
-const images = Array.from(
-  new Set(
-    imageCandidates
-      .filter(
-        (value): value is string =>
-          typeof value === "string" && value.trim().length > 0
-      )
-      .map((value) => value.trim())
-  )
-);
+          const images = Array.from(
+            new Set(
+              imageCandidates
+                .filter(
+                  (value): value is string =>
+                    typeof value === "string" && value.trim().length > 0
+                )
+                .map((value) => value.trim())
+            )
+          );
 
           const rawColors = getStringArray(data.colors);
+
           const colorStocks = normalizeColorStocks(
             data.colorStocks,
             rawColors,
             stock
           );
-          const normalizedColors = colorStocks.map((entry) => entry.color);
-          const totalColorStock = colorStocks.reduce((sum, entry) => sum + entry.stock, 0);
+
+          const normalizedColors = colorStocks.map(
+            (entry) => entry.color
+          );
+
+          const totalColorStock = colorStocks.reduce(
+            (sum, entry) => sum + entry.stock,
+            0
+          );
 
           const loadedProduct: Product = {
             id: snapshot.id,
@@ -510,7 +532,9 @@ const images = Array.from(
               typeof data.description === "string" ? data.description : "",
             image: images[0] ?? "",
             images,
-            colors: normalizedColors.length ? normalizedColors : ["Default"],
+            colors: normalizedColors.length
+              ? normalizedColors
+              : ["Default"],
             colorStocks,
             sizes: getStringArray(data.sizes),
           };
@@ -537,8 +561,14 @@ const images = Array.from(
             const currentColor = loadedProduct.colors.includes(selectedColor)
               ? selectedColor
               : loadedProduct.colors[0];
-            const available = loadedProduct.colorStocks.find((entry) => entry.color === currentColor)?.stock ?? 0;
+
+            const available =
+              loadedProduct.colorStocks.find(
+                (entry) => entry.color === currentColor
+              )?.stock ?? 0;
+
             if (available <= 0) return 0;
+
             return Math.min(Math.max(1, current), available);
           });
 
@@ -560,11 +590,13 @@ const images = Array.from(
           setLoading(false);
         } catch (err) {
           console.error("Product details error:", err);
+
           setError(
             err instanceof Error
               ? err.message
               : "Unable to load this product."
           );
+
           setLoading(false);
         }
       },
@@ -590,6 +622,7 @@ const images = Array.from(
       saveCart(cart);
     } catch (err) {
       console.error("Unable to save cart:", err);
+
       setError(
         "Unable to save your cart. Please check your browser storage settings."
       );
@@ -599,10 +632,12 @@ const images = Array.from(
   useEffect(() => {
     function handleStorage(event: StorageEvent) {
       if (event.key !== CART_KEY) return;
+
       setCart(readCart());
     }
 
     window.addEventListener("storage", handleStorage);
+
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
@@ -655,6 +690,7 @@ const images = Array.from(
     setCheckoutError("");
 
     const availableForColor = selectedColorStock;
+
     if (availableForColor < 1) {
       setError(`${selectedColor || "Default"} is currently out of stock.`);
       return;
@@ -665,7 +701,9 @@ const images = Array.from(
       quantity < 1 ||
       quantity > availableForColor
     ) {
-      setError(`Please select a quantity between 1 and ${availableForColor} for ${selectedColor || "Default"}.`);
+      setError(
+        `Please select a quantity between 1 and ${availableForColor} for ${selectedColor || "Default"}.`
+      );
       return;
     }
 
@@ -677,6 +715,7 @@ const images = Array.from(
     };
 
     if (goToCheckout) {
+      setAppliedCoupon(null);
       setCheckoutItems([selectedItem]);
       setCheckoutMode("buyNow");
       setCartOpen(false);
@@ -685,6 +724,7 @@ const images = Array.from(
     }
 
     const existingCart = readCart();
+
     const matchingItem = existingCart.find((item) =>
       sameVariant(item, selectedItem)
     );
@@ -721,9 +761,11 @@ const images = Array.from(
       setCart(updatedCart);
     } catch (err) {
       console.error("Unable to save cart:", err);
+
       setError(
         "Unable to save your cart. Please check your browser storage settings."
       );
+
       return;
     }
 
@@ -733,7 +775,10 @@ const images = Array.from(
 
   function updateCartQuantity(item: CartItem, delta: number) {
     const latestCart = readCart();
-    const currentItem = latestCart.find((entry) => sameVariant(entry, item));
+
+    const currentItem = latestCart.find((entry) =>
+      sameVariant(entry, item)
+    );
 
     if (!currentItem) return;
 
@@ -745,6 +790,7 @@ const images = Array.from(
     }
 
     const availableForVariant = getVariantStock(currentItem);
+
     const sameColorOtherQuantity = latestCart
       .filter(
         (entry) =>
@@ -759,11 +805,14 @@ const images = Array.from(
       setCheckoutError(
         `Only ${availableForVariant} unit(s) of ${currentItem.name} (${currentItem.selectedColor || "Default"}) are available across sizes.`
       );
+
       return;
     }
 
     const updatedCart = latestCart.map((entry) =>
-      sameVariant(entry, item) ? { ...entry, quantity: nextQuantity } : entry
+      sameVariant(entry, item)
+        ? { ...entry, quantity: nextQuantity }
+        : entry
     );
 
     try {
@@ -806,10 +855,13 @@ const images = Array.from(
 
     if (latestCart.length === 0) {
       setCart([]);
-      setCheckoutError("Your cart is empty. Add a product before checking out.");
+      setCheckoutError(
+        "Your cart is empty. Add a product before checking out."
+      );
       return;
     }
 
+    setAppliedCoupon(null);
     setCheckoutItems(latestCart);
     setCheckoutMode("cart");
     setCheckoutError("");
@@ -855,11 +907,17 @@ const images = Array.from(
       !form.phone.trim() ||
       !form.address.trim()
     ) {
-      setCheckoutError("Please complete all customer and delivery details.");
+      setCheckoutError(
+        "Please complete all customer and delivery details."
+      );
       return;
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.customerEmail.trim())) {
+    if (
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+        form.customerEmail.trim()
+      )
+    ) {
       setCheckoutError("Please enter a valid email address.");
       return;
     }
@@ -891,9 +949,14 @@ const images = Array.from(
           return;
         }
 
-        normalizedPaymentNumber = form.paymentNumber.replace(/[\s()-]/g, "");
+        normalizedPaymentNumber = form.paymentNumber.replace(
+          /[\s()-]/g,
+          ""
+        );
       } else {
-        const ibanResult = validatePakistanIban(form.paymentNumber);
+        const ibanResult = validatePakistanIban(
+          form.paymentNumber
+        );
 
         if (!ibanResult.valid) {
           setCheckoutError(ibanResult.message);
@@ -906,21 +969,67 @@ const images = Array.from(
       }
     }
 
+    // Calculate coupon discount using the exact items being ordered.
+    const orderSubtotal = latestItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+
+    if (
+      appliedCoupon &&
+      orderSubtotal < Number(appliedCoupon.minOrderValue || 0)
+    ) {
+      setCheckoutError(
+        `This coupon requires a minimum order of ${formatPrice(
+          Number(appliedCoupon.minOrderValue || 0)
+        )}.`
+      );
+      return;
+    }
+
+    const orderDiscount = appliedCoupon
+      ? appliedCoupon.type === "percentage"
+        ? Math.min(
+            orderSubtotal,
+            (orderSubtotal * appliedCoupon.value) / 100
+          )
+        : Math.min(orderSubtotal, appliedCoupon.value)
+      : 0;
+
+    const orderTotal = Math.max(
+      0,
+      orderSubtotal - orderDiscount
+    );
+
     setSubmitting(true);
 
     try {
-      const productQuantities = new Map<string, { id: string; color: string; quantity: number; item: CartItem }>();
+      const productQuantities = new Map<
+        string,
+        {
+          id: string;
+          color: string;
+          quantity: number;
+          item: CartItem;
+        }
+      >();
 
       for (const item of latestItems) {
-        if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+        if (
+          !Number.isInteger(item.quantity) ||
+          item.quantity < 1
+        ) {
           throw new Error(
             `Invalid quantity for ${item.name}. Please update your order.`
           );
         }
 
-        const color = item.selectedColor || item.colors[0] || "Default";
+        const color =
+          item.selectedColor || item.colors[0] || "Default";
+
         const key = `${item.id}::${color.toLowerCase()}`;
         const existing = productQuantities.get(key);
+
         productQuantities.set(key, {
           id: item.id,
           color,
@@ -930,7 +1039,12 @@ const images = Array.from(
       }
 
       // Verify current stock for every product in the checkout.
-      for (const { id, color, quantity: requestedQuantity, item } of productQuantities.values()) {
+      for (const {
+        id,
+        color,
+        quantity: requestedQuantity,
+        item,
+      } of productQuantities.values()) {
         const snapshot = await getDoc(doc(db, "products", id));
 
         if (!snapshot.exists()) {
@@ -940,53 +1054,75 @@ const images = Array.from(
         }
 
         const productData = snapshot.data();
+
         const rawColorStocks = normalizeColorStocks(
           productData.colorStocks,
           getStringArray(productData.colors),
           Number(productData.stock ?? 0)
         );
-    const matchedColor = rawColorStocks.find(
-  (entry) =>
-    entry.color.trim().toLowerCase() === color.trim().toLowerCase()
-);
 
-if (!matchedColor) {
-  throw new Error(
-    `Stock for ${item.name} in color "${color}" is not configured. Please contact the store administrator.`
-  );
-}
+        const matchedColor = rawColorStocks.find(
+          (entry) =>
+            entry.color.trim().toLowerCase() ===
+            color.trim().toLowerCase()
+        );
 
-const latestStock = matchedColor.stock;
+        if (!matchedColor) {
+          throw new Error(
+            `Stock for ${item.name} in color "${color}" is not configured. Please contact the store administrator.`
+          );
+        }
 
-        if (!Number.isFinite(latestStock) || latestStock < requestedQuantity) {
+        const latestStock = matchedColor.stock;
+
+        if (
+          !Number.isFinite(latestStock) ||
+          latestStock < requestedQuantity
+        ) {
           throw new Error(
             `Insufficient stock for ${item.name} in ${color}. Available quantity: ${Math.max(0, latestStock)}. Please update your order.`
           );
         }
 
-        const totalLatestStock = rawColorStocks.reduce((sum, entry) => sum + entry.stock, 0);
-        setCheckoutItems((current) =>
-          current.map((checkoutItem) => checkoutItem.id === id
-            ? { ...checkoutItem, stock: totalLatestStock, colorStocks: rawColorStocks }
-            : checkoutItem)
+        const totalLatestStock = rawColorStocks.reduce(
+          (sum, entry) => sum + entry.stock,
+          0
         );
+
+        setCheckoutItems((current) =>
+          current.map((checkoutItem) =>
+            checkoutItem.id === id
+              ? {
+                  ...checkoutItem,
+                  stock: totalLatestStock,
+                  colorStocks: rawColorStocks,
+                }
+              : checkoutItem
+          )
+        );
+
         setCart((current) =>
-          current.map((cartItem) => cartItem.id === id
-            ? { ...cartItem, stock: totalLatestStock, colorStocks: rawColorStocks }
-            : cartItem)
+          current.map((cartItem) =>
+            cartItem.id === id
+              ? {
+                  ...cartItem,
+                  stock: totalLatestStock,
+                  colorStocks: rawColorStocks,
+                }
+              : cartItem
+          )
         );
       }
 
-      const orderTotal = latestItems.reduce(
-        (sum, item) => sum + item.price * item.quantity,
-        0
-      );
-
       const paymentNumber =
-        form.paymentMethod === "Online" ? normalizedPaymentNumber : "";
+        form.paymentMethod === "Online"
+          ? normalizedPaymentNumber
+          : "";
 
       const paymentType =
-        form.paymentMethod === "Online" ? form.paymentType : "";
+        form.paymentMethod === "Online"
+          ? form.paymentType
+          : "";
 
       const response = await fetch("/api/orders", {
         method: "POST",
@@ -999,28 +1135,33 @@ const latestStock = matchedColor.stock;
           phone: form.phone.trim(),
           address: form.address.trim(),
 
-        
-items: latestItems.map((item) => {
-  const color =
-    item.selectedColor || item.colors[0] || "Default";
+          items: latestItems.map((item) => {
+            const color =
+              item.selectedColor || item.colors[0] || "Default";
 
-  return {
-    productId: item.id,
-    id: item.id,
-    name: item.name,
-    price: item.price,
-    quantity: item.quantity,
-    image: item.image,
-    images: item.images,
-    category: item.category,
+            return {
+              productId: item.id,
+              id: item.id,
+              name: item.name,
+              price: item.price,
+              quantity: item.quantity,
+              image: item.image,
+              images: item.images,
+              category: item.category,
 
-    // Both fields are sent for compatibility with the orders API.
-    color,
-    selectedColor: color,
-    selectedSize: item.selectedSize ?? "",
-  };
-}),
+              color,
+              selectedColor: color,
+              selectedSize: item.selectedSize ?? "",
+            };
+          }),
 
+          // Coupon and discounted order totals
+          subtotal: orderSubtotal,
+          discount: orderDiscount,
+          couponCode: appliedCoupon?.code || "",
+          couponName: appliedCoupon?.name || "",
+          couponType: appliedCoupon?.type || "",
+          couponValue: appliedCoupon?.value || 0,
 
           totalAmount: orderTotal,
           total: orderTotal,
@@ -1031,15 +1172,19 @@ items: latestItems.map((item) => {
 
           payment: {
             method:
-              form.paymentMethod === "Online" ? "Online Payment" : "COD",
+              form.paymentMethod === "Online"
+                ? "Online Payment"
+                : "COD",
             paymentType,
             payerName: form.customerName.trim(),
             paymentNumber,
             amount: orderTotal,
           },
 
-          paymentStatus: form.paymentMethod === "Online" ? "Paid" : "Pending",
-status: "Processing",
+          paymentStatus:
+            form.paymentMethod === "Online" ? "Paid" : "Pending",
+
+          status: "Processing",
           source: "store",
         }),
       });
@@ -1047,7 +1192,9 @@ status: "Processing",
       const result = await response.json();
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || "Unable to place your order.");
+        throw new Error(
+          result.error || "Unable to place your order."
+        );
       }
 
       const orderId = String(result.orderId ?? "");
@@ -1062,21 +1209,24 @@ status: "Processing",
       setCheckoutOpen(false);
       setCartOpen(false);
       setNotice("");
+      setAppliedCoupon(null);
 
-      // Open the confirmation popup only after the API confirms success.
       setConfirmedOrder({
         orderId,
         total: orderTotal,
         paymentMethod: form.paymentMethod,
         paymentStatus:
-  form.paymentMethod === "Online"
-    ? "Paid"
-    : typeof result.paymentStatus === "string"
-      ? result.paymentStatus
-      : "Pending",
+          form.paymentMethod === "Online"
+            ? "Paid"
+            : typeof result.paymentStatus === "string"
+              ? result.paymentStatus
+              : "Pending",
         orderStatus:
-          typeof result.status === "string" ? result.status : "Processing",
+          typeof result.status === "string"
+            ? result.status
+            : "Processing",
       });
+
       setConfirmationOpen(true);
 
       setForm((current) => ({
@@ -1087,6 +1237,7 @@ status: "Processing",
       }));
     } catch (err) {
       console.error("Order submission error:", err);
+
       setCheckoutError(
         err instanceof Error
           ? err.message
@@ -1107,7 +1258,9 @@ status: "Processing",
     return (
       <main className="flex min-h-screen items-center justify-center gap-3 bg-[#F7F5EF] text-[#315C43]">
         <Loader2 size={25} className="animate-spin" />
-        <span className="text-sm font-medium">Loading product details...</span>
+        <span className="text-sm font-medium">
+          Loading product details...
+        </span>
       </main>
     );
   }
@@ -1116,14 +1269,23 @@ status: "Processing",
     return (
       <main className="min-h-screen bg-[#F7F5EF] px-4 py-16 text-[#20251F]">
         <div className="mx-auto max-w-xl rounded-2xl border border-[#E4E2D8] bg-white p-8 text-center">
-          <ShoppingBag size={40} className="mx-auto text-[#77796F]" />
-          <h1 className="mt-4 text-xl font-bold">Product unavailable</h1>
+          <ShoppingBag
+            size={40}
+            className="mx-auto text-[#77796F]"
+          />
+
+          <h1 className="mt-4 text-xl font-bold">
+            Product unavailable
+          </h1>
+
           <p className="mt-2 break-words text-sm leading-6 text-[#77796F]">
             {error || "This product could not be found."}
           </p>
+
           <p className="mt-3 break-all text-xs text-[#929489]">
             Product ID: {productId || "Missing"}
           </p>
+
           <Link
             href="/store"
             className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#315C43] px-5 py-3 text-sm font-semibold text-white hover:bg-[#254832]"
@@ -1144,8 +1306,11 @@ status: "Processing",
             <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#315C43] text-white">
               <Store size={23} />
             </span>
+
             <span>
-              <span className="block text-lg font-bold">PrimeCart</span>
+              <span className="block text-lg font-bold">
+                PrimeCart
+              </span>
               <span className="block text-xs text-[#77796F]">
                 Everyday shopping, made simple
               </span>
@@ -1165,6 +1330,7 @@ status: "Processing",
           >
             <ShoppingCart size={19} />
             <span className="hidden sm:inline">My Cart</span>
+
             <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-[#E9DDBD] px-1 text-xs font-bold text-[#20251F]">
               {cartCount}
             </span>
@@ -1200,7 +1366,6 @@ status: "Processing",
 
         <section className="mt-7 grid grid-cols-1 gap-8 md:grid-cols-2 md:gap-12">
           <div>
-            {/* Main image gallery: arrows, thumbnails and mobile swipe */}
             <div
               className="relative flex min-h-[340px] touch-pan-y items-center justify-center overflow-hidden rounded-3xl bg-[#F0EEE5] sm:min-h-[480px]"
               onTouchStart={handleGalleryTouchStart}
@@ -1224,24 +1389,26 @@ status: "Processing",
               {product.images.length > 1 && (
                 <>
                   <button
-  type="button"
-  disabled={selectedImageIndex === 0}
-  onClick={() => changeGalleryImage(-1)}
-  aria-label="Previous product image"
-  className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#E4E2D8] bg-white/95 text-[#315C43] shadow-md transition hover:bg-[#E7EFE6] disabled:cursor-not-allowed disabled:opacity-30"
->
-  <ArrowLeft size={19} />
-</button>
+                    type="button"
+                    disabled={selectedImageIndex === 0}
+                    onClick={() => changeGalleryImage(-1)}
+                    aria-label="Previous product image"
+                    className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#E4E2D8] bg-white/95 text-[#315C43] shadow-md transition hover:bg-[#E7EFE6] disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <ArrowLeft size={19} />
+                  </button>
 
                   <button
-  type="button"
-  disabled={selectedImageIndex === product.images.length - 1}
-  onClick={() => changeGalleryImage(1)}
-  aria-label="Next product image"
-  className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#E4E2D8] bg-white/95 text-[#315C43] shadow-md transition hover:bg-[#E7EFE6] disabled:cursor-not-allowed disabled:opacity-30"
->
-  <ArrowRight size={19} />
-</button>
+                    type="button"
+                    disabled={
+                      selectedImageIndex === product.images.length - 1
+                    }
+                    onClick={() => changeGalleryImage(1)}
+                    aria-label="Next product image"
+                    className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#E4E2D8] bg-white/95 text-[#315C43] shadow-md transition hover:bg-[#E7EFE6] disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <ArrowRight size={19} />
+                  </button>
 
                   <span className="absolute bottom-3 right-3 rounded-full bg-[#20251F]/75 px-3 py-1.5 text-xs font-semibold text-white">
                     {selectedImageIndex + 1} / {product.images.length}
@@ -1286,9 +1453,11 @@ status: "Processing",
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#66806B]">
               {product.category}
             </p>
+
             <h1 className="mt-3 text-3xl font-bold leading-tight sm:text-4xl">
               {product.name}
             </h1>
+
             <p className="mt-5 text-2xl font-bold text-[#315C43] sm:text-3xl">
               {formatPrice(product.price)}
             </p>
@@ -1311,6 +1480,7 @@ status: "Processing",
 
             <div className="mt-7 border-t border-[#E4E2D8] pt-6">
               <h2 className="font-bold">Product Description</h2>
+
               <p className="mt-3 whitespace-pre-line text-sm leading-7 text-[#62665C]">
                 {product.description ||
                   "Product details have not been added yet."}
@@ -1325,6 +1495,7 @@ status: "Processing",
                     {selectedColor}
                   </span>
                 </h2>
+
                 <div className="mt-3 flex flex-wrap gap-2">
                   {product.colors.map((color) => (
                     <button
@@ -1332,7 +1503,14 @@ status: "Processing",
                       type="button"
                       onClick={() => {
                         setSelectedColor(color);
-                        const available = product.colorStocks.find((entry) => entry.color.toLowerCase() === color.toLowerCase())?.stock ?? 0;
+
+                        const available =
+                          product.colorStocks.find(
+                            (entry) =>
+                              entry.color.toLowerCase() ===
+                              color.toLowerCase()
+                          )?.stock ?? 0;
+
                         setQuantity(available > 0 ? 1 : 0);
                         setError("");
                       }}
@@ -1343,8 +1521,15 @@ status: "Processing",
                       }`}
                     >
                       <span>{color}</span>
-                      {(product.colorStocks.find((entry) => entry.color.toLowerCase() === color.toLowerCase())?.stock ?? 0) <= 0 && (
-                        <span className="ml-2 text-xs font-bold text-red-600">Not in stock</span>
+
+                      {(product.colorStocks.find(
+                        (entry) =>
+                          entry.color.toLowerCase() ===
+                          color.toLowerCase()
+                      )?.stock ?? 0) <= 0 && (
+                        <span className="ml-2 text-xs font-bold text-red-600">
+                          Not in stock
+                        </span>
                       )}
                     </button>
                   ))}
@@ -1360,6 +1545,7 @@ status: "Processing",
                     {selectedSize}
                   </span>
                 </h2>
+
                 <div className="mt-3 flex flex-wrap gap-2">
                   {product.sizes.map((size) => (
                     <button
@@ -1380,7 +1566,10 @@ status: "Processing",
             )}
 
             <div className="mt-7">
-              <label className="block text-sm font-bold">Quantity</label>
+              <label className="block text-sm font-bold">
+                Quantity
+              </label>
+
               <div className="mt-3 inline-flex items-center gap-5 rounded-xl border border-[#E0DED3] bg-white p-2">
                 <button
                   type="button"
@@ -1393,12 +1582,17 @@ status: "Processing",
                 >
                   <Minus size={17} />
                 </button>
+
                 <span className="min-w-6 text-center font-bold">
                   {quantity}
                 </span>
+
                 <button
                   type="button"
-                  disabled={quantity >= selectedColorStock || selectedColorStock < 1}
+                  disabled={
+                    quantity >= selectedColorStock ||
+                    selectedColorStock < 1
+                  }
                   onClick={() =>
                     setQuantity((current) =>
                       Math.min(selectedColorStock, current + 1)
@@ -1422,6 +1616,7 @@ status: "Processing",
                 <ShoppingCart size={18} />
                 Add to Cart
               </button>
+
               <button
                 type="button"
                 disabled={selectedColorStock < 1 || !cartLoaded}
@@ -1442,8 +1637,12 @@ status: "Processing",
 
       <footer className="mt-10 border-t border-[#E4E2D8] bg-white">
         <div className="mx-auto max-w-7xl px-4 py-7 text-sm text-[#77796F] sm:px-6 lg:px-8">
-          <span className="font-semibold text-[#315C43]">PrimeCart</span>
-          <span className="ml-3">Thank you for shopping with us.</span>
+          <span className="font-semibold text-[#315C43]">
+            PrimeCart
+          </span>
+          <span className="ml-3">
+            Thank you for shopping with us.
+          </span>
         </div>
       </footer>
 
@@ -1472,6 +1671,7 @@ status: "Processing",
                 <ArrowLeft size={18} />
                 Back to Product
               </button>
+
               <button
                 type="button"
                 onClick={closeCart}
@@ -1484,6 +1684,7 @@ status: "Processing",
 
             <div className="flex items-center justify-between px-5 py-5">
               <h2 className="text-xl font-bold">Your Cart</h2>
+
               <span className="rounded-full bg-[#E9DDBD] px-3 py-1 text-sm font-bold">
                 {cartCount} item(s)
               </span>
@@ -1496,10 +1697,15 @@ status: "Processing",
                     size={38}
                     className="mx-auto text-[#77796F]"
                   />
-                  <h3 className="mt-4 font-bold">Your cart is empty</h3>
+
+                  <h3 className="mt-4 font-bold">
+                    Your cart is empty
+                  </h3>
+
                   <p className="mt-2 text-sm text-[#77796F]">
                     Return to the product and add an item to your cart.
                   </p>
+
                   <button
                     type="button"
                     onClick={closeCart}
@@ -1533,13 +1739,17 @@ status: "Processing",
 
                         <div className="min-w-0 flex-1">
                           <h3 className="font-bold">{item.name}</h3>
+
                           <p className="mt-1 text-sm font-semibold text-[#315C43]">
                             {formatPrice(item.price)}
                           </p>
 
                           {(item.selectedColor || item.selectedSize) && (
                             <p className="mt-1 text-xs text-[#77796F]">
-                              {[item.selectedColor, item.selectedSize]
+                              {[
+                                item.selectedColor,
+                                item.selectedSize,
+                              ]
                                 .filter(Boolean)
                                 .join(" · ")}
                             </p>
@@ -1556,7 +1766,9 @@ status: "Processing",
                               <button
                                 type="button"
                                 aria-label={`Decrease ${item.name} quantity`}
-                                onClick={() => updateCartQuantity(item, -1)}
+                                onClick={() =>
+                                  updateCartQuantity(item, -1)
+                                }
                                 className="p-1.5 hover:text-[#315C43]"
                               >
                                 <Minus size={14} />
@@ -1577,11 +1789,25 @@ status: "Processing",
                                         entry.id === item.id &&
                                         !sameVariant(entry, item)
                                     )
-                                    .filter((entry) => (entry.selectedColor || "Default").toLowerCase() === (item.selectedColor || "Default").toLowerCase())
-                                    .reduce((sum, entry) => sum + entry.quantity, 0) +
+                                    .filter(
+                                      (entry) =>
+                                        (
+                                          entry.selectedColor || "Default"
+                                        ).toLowerCase() ===
+                                        (
+                                          item.selectedColor || "Default"
+                                        ).toLowerCase()
+                                    )
+                                    .reduce(
+                                      (sum, entry) =>
+                                        sum + entry.quantity,
+                                      0
+                                    ) +
                                     item.quantity >= getVariantStock(item)
                                 }
-                                onClick={() => updateCartQuantity(item, 1)}
+                                onClick={() =>
+                                  updateCartQuantity(item, 1)
+                                }
                                 className="p-1.5 hover:text-[#315C43] disabled:opacity-40"
                               >
                                 <Plus size={14} />
@@ -1618,13 +1844,16 @@ status: "Processing",
               <div className="border-t border-[#E4E2D8] bg-white p-5">
                 <div className="flex items-center justify-between text-sm text-[#62665C]">
                   <span>Subtotal</span>
+
                   <span className="font-bold text-[#20251F]">
                     {formatPrice(subtotal)}
                   </span>
                 </div>
+
                 <p className="mt-2 text-xs text-[#77796F]">
                   Delivery charges, if applicable, will be confirmed separately.
                 </p>
+
                 <button
                   type="button"
                   onClick={openCartCheckout}
@@ -1659,7 +1888,9 @@ status: "Processing",
                 className="inline-flex items-center gap-2 text-sm font-semibold text-[#315C43] hover:underline"
               >
                 <ArrowLeft size={18} />
-                {checkoutMode === "buyNow" ? "Back to Product" : "Back to Cart"}
+                {checkoutMode === "buyNow"
+                  ? "Back to Product"
+                  : "Back to Cart"}
               </button>
 
               <button
@@ -1677,17 +1908,20 @@ status: "Processing",
               className="max-h-[calc(100vh-100px)] overflow-y-auto p-5 sm:p-6"
             >
               <h2 className="text-2xl font-bold">Checkout</h2>
+
               <p className="mt-1 text-sm text-[#77796F]">
                 {checkoutMode === "buyNow"
                   ? "Review your selected product and enter your details."
                   : "Review your cart and enter your details to place your order."}
               </p>
 
+              {/* Order items summary */}
               <div className="mt-5 rounded-xl border border-[#E4E2D8] bg-white p-4">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm text-[#62665C]">
                     Items ({checkoutCount})
                   </span>
+
                   <span className="font-bold">
                     {formatPrice(checkoutSubtotal)}
                   </span>
@@ -1701,11 +1935,16 @@ status: "Processing",
                     >
                       <span className="text-[#62665C]">
                         {item.name} × {item.quantity}
+
                         {(item.selectedColor || item.selectedSize) &&
-                          ` (${[item.selectedColor, item.selectedSize]
+                          ` (${[
+                            item.selectedColor,
+                            item.selectedSize,
+                          ]
                             .filter(Boolean)
                             .join(", ")})`}
                       </span>
+
                       <span className="shrink-0 font-semibold">
                         {formatPrice(item.price * item.quantity)}
                       </span>
@@ -1714,6 +1953,23 @@ status: "Processing",
                 </div>
               </div>
 
+              {/* Coupon section */}
+              <div className="mt-5">
+                <CouponBox
+                  subtotal={checkoutSubtotal}
+                  appliedCoupon={appliedCoupon}
+                  onApply={(coupon) => {
+                    setAppliedCoupon(coupon);
+                    setCheckoutError("");
+                  }}
+                  onRemove={() => {
+                    setAppliedCoupon(null);
+                    setCheckoutError("");
+                  }}
+                />
+              </div>
+
+              {/* Customer details */}
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 <div>
                   <label
@@ -1722,6 +1978,7 @@ status: "Processing",
                   >
                     Full Name *
                   </label>
+
                   <input
                     id="customerName"
                     required
@@ -1742,6 +1999,7 @@ status: "Processing",
                   >
                     Email Address *
                   </label>
+
                   <input
                     id="customerEmail"
                     type="email"
@@ -1763,6 +2021,7 @@ status: "Processing",
                   >
                     Mobile Number *
                   </label>
+
                   <input
                     id="customerPhone"
                     type="tel"
@@ -1770,7 +2029,10 @@ status: "Processing",
                     autoComplete="tel"
                     value={form.phone}
                     onChange={(e) =>
-                      updateForm("phone", normalizeMobileNumber(e.target.value))
+                      updateForm(
+                        "phone",
+                        normalizeMobileNumber(e.target.value)
+                      )
                     }
                     className="w-full rounded-xl border border-[#DCD9CD] bg-white px-3 py-3 text-sm outline-none focus:border-[#315C43]"
                     placeholder="03001234567"
@@ -1784,20 +2046,26 @@ status: "Processing",
                   >
                     Delivery Address *
                   </label>
+
                   <input
                     id="deliveryAddress"
                     required
                     autoComplete="street-address"
                     value={form.address}
-                    onChange={(e) => updateForm("address", e.target.value)}
+                    onChange={(e) =>
+                      updateForm("address", e.target.value)
+                    }
                     className="w-full rounded-xl border border-[#DCD9CD] bg-white px-3 py-3 text-sm outline-none focus:border-[#315C43]"
                     placeholder="House, street, city"
                   />
                 </div>
               </div>
 
+              {/* Payment method */}
               <div className="mt-6">
-                <h3 className="text-sm font-bold">Payment Method</h3>
+                <h3 className="text-sm font-bold">
+                  Payment Method
+                </h3>
 
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <button
@@ -1815,7 +2083,10 @@ status: "Processing",
                         : "border-[#E0DED3] bg-white"
                     }`}
                   >
-                    <span className="block font-bold">Cash on Delivery</span>
+                    <span className="block font-bold">
+                      Cash on Delivery
+                    </span>
+
                     <span className="mt-1 block text-xs text-[#77796F]">
                       Pay when your order arrives.
                     </span>
@@ -1823,14 +2094,19 @@ status: "Processing",
 
                   <button
                     type="button"
-                    onClick={() => updateForm("paymentMethod", "Online")}
+                    onClick={() =>
+                      updateForm("paymentMethod", "Online")
+                    }
                     className={`rounded-xl border p-4 text-left ${
                       form.paymentMethod === "Online"
                         ? "border-[#315C43] bg-[#E7EFE6]"
                         : "border-[#E0DED3] bg-white"
                     }`}
                   >
-                    <span className="block font-bold">Online Payment</span>
+                    <span className="block font-bold">
+                      Online Payment
+                    </span>
+
                     <span className="mt-1 block text-xs text-[#77796F]">
                       Choose a mobile number or bank account number.
                     </span>
@@ -1861,6 +2137,7 @@ status: "Processing",
                       }`}
                     >
                       Mobile Number
+
                       <span className="mt-1 block text-xs font-normal text-[#77796F]">
                         Easypaisa, JazzCash or other mobile payment
                       </span>
@@ -1882,6 +2159,7 @@ status: "Processing",
                       }`}
                     >
                       Bank Account Number
+
                       <span className="mt-1 block text-xs font-normal text-[#77796F]">
                         Enter your 24-character Pakistani IBAN
                       </span>
@@ -1914,13 +2192,17 @@ status: "Processing",
                     spellCheck={false}
                     required
                     maxLength={
-                      form.paymentType === "Bank Account Number" ? 24 : 13
+                      form.paymentType === "Bank Account Number"
+                        ? 24
+                        : 13
                     }
                     value={form.paymentNumber}
                     onChange={(e) => {
                       const rawValue = e.target.value;
 
-                      if (form.paymentType === "Bank Account Number") {
+                      if (
+                        form.paymentType === "Bank Account Number"
+                      ) {
                         const value = rawValue
                           .replace(/[\s-]/g, "")
                           .replace(/[^a-zA-Z0-9]/g, "")
@@ -1939,10 +2221,10 @@ status: "Processing",
                         return;
                       }
 
-                      const value = normalizeMobileNumber(rawValue).slice(
-                        0,
-                        13
-                      );
+                      const value = normalizeMobileNumber(
+                        rawValue
+                      ).slice(0, 13);
+
                       updateForm("paymentNumber", value);
                     }}
                     className="w-full rounded-xl border border-[#DCD9CD] bg-white px-3 py-3 text-sm uppercase outline-none focus:border-[#315C43]"
@@ -1964,10 +2246,9 @@ status: "Processing",
                         <p className="mt-1 text-xs font-medium text-[#315C43]">
                           Bank identifier:{" "}
                           {PAKISTAN_IBAN_BANKS[
-                            normalizePakistanIban(form.paymentNumber).slice(
-                              4,
-                              8
-                            )
+                            normalizePakistanIban(
+                              form.paymentNumber
+                            ).slice(4, 8)
                           ] ??
                             "Code not listed — IBAN format and checksum will still be validated"}
                         </p>
@@ -1980,8 +2261,8 @@ status: "Processing",
                     className="mt-2 text-xs leading-5 text-[#77796F]"
                   >
                     {form.paymentType === "Bank Account Number"
-                      ? "Enter your 24-character Pakistani IBAN.Example: PK36SCBL0000001123456702. Format validation does not confirm account ownership or transfer money."
-                      : "Enter a Pakistani IBAN."}
+                      ? "Enter your 24-character Pakistani IBAN. Example: PK36SCBL0000001123456702. Format validation does not confirm account ownership or transfer money."
+                      : "Enter a valid Pakistani mobile payment number."}
                   </p>
                 </div>
               )}
@@ -1995,12 +2276,37 @@ status: "Processing",
                 </p>
               )}
 
+              {/* Updated order summary */}
               <div className="mt-6 border-t border-[#E4E2D8] pt-5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold">Order Total</span>
-                  <span className="text-xl font-bold text-[#315C43]">
-                    {formatPrice(checkoutSubtotal)}
-                  </span>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-sm text-[#62665C]">
+                    <span>Subtotal</span>
+                    <span className="font-semibold text-[#20251F]">
+                      {formatPrice(checkoutSubtotal)}
+                    </span>
+                  </div>
+
+                  {appliedCoupon && (
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="font-medium text-[#315C43]">
+                        Discount ({appliedCoupon.code})
+                      </span>
+
+                      <span className="font-bold text-[#315C43]">
+                        -{formatPrice(checkoutDiscount)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between border-t border-[#E4E2D8] pt-3">
+                    <span className="font-semibold">
+                      Order Total
+                    </span>
+
+                    <span className="text-xl font-bold text-[#315C43]">
+                      {formatPrice(checkoutTotal)}
+                    </span>
+                  </div>
                 </div>
 
                 <button
@@ -2079,21 +2385,30 @@ status: "Processing",
 
               <div className="mt-6 rounded-2xl border border-[#E4E2D8] bg-white p-4 text-left">
                 <div className="flex items-start justify-between gap-4 border-b border-[#EEECE4] pb-3">
-                  <span className="text-sm text-[#77796F]">Order ID</span>
+                  <span className="text-sm text-[#77796F]">
+                    Order ID
+                  </span>
+
                   <span className="max-w-[60%] break-all text-right text-sm font-bold text-[#20251F]">
                     {confirmedOrder.orderId || "Order placed"}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between gap-4 border-b border-[#EEECE4] py-3">
-                  <span className="text-sm text-[#77796F]">Order Total</span>
+                  <span className="text-sm text-[#77796F]">
+                    Order Total
+                  </span>
+
                   <span className="text-right text-base font-bold text-[#315C43]">
                     {formatPrice(confirmedOrder.total)}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between gap-4 border-b border-[#EEECE4] py-3">
-                  <span className="text-sm text-[#77796F]">Payment</span>
+                  <span className="text-sm text-[#77796F]">
+                    Payment
+                  </span>
+
                   <span className="text-right text-sm font-semibold text-[#20251F]">
                     {confirmedOrder.paymentMethod === "COD"
                       ? "Cash on Delivery"
@@ -2102,25 +2417,31 @@ status: "Processing",
                 </div>
 
                 <div className="flex items-center justify-between gap-4 border-b border-[#EEECE4] py-3">
-                  <span className="text-sm text-[#77796F]">Order Status</span>
+                  <span className="text-sm text-[#77796F]">
+                    Order Status
+                  </span>
+
                   <span className="rounded-full bg-[#E7EFE6] px-3 py-1 text-xs font-bold text-[#315C43]">
                     {confirmedOrder.orderStatus}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between gap-4 pt-3">
-                  <span className="text-sm text-[#77796F]">Payment Status</span>
+                  <span className="text-sm text-[#77796F]">
+                    Payment Status
+                  </span>
+
                   <span className="rounded-full bg-[#F8E9C9] px-3 py-1 text-xs font-bold text-[#805B19]">
                     {confirmedOrder.paymentStatus}
                   </span>
                 </div>
               </div>
 
-            {confirmedOrder.paymentMethod === "Online" && (
-  <p className="mt-3 text-left text-xs leading-5 text-[#77796F]">
-    Payment status: Paid.
-  </p>
-)}
+              {confirmedOrder.paymentMethod === "Online" && (
+                <p className="mt-3 text-left text-xs leading-5 text-[#77796F]">
+                  Payment status: Paid.
+                </p>
+              )}
 
               <button
                 type="button"

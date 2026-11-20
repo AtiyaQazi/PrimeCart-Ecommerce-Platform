@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from "next/link";
@@ -12,6 +13,7 @@ import {
   Settings,
   Store,
   X,
+  TicketPercent,
 } from "lucide-react";
 
 const navigation = [
@@ -20,6 +22,7 @@ const navigation = [
   { name: "Orders", href: "/orders", icon: ShoppingCart },
   { name: "Customers", href: "/customers", icon: Users },
   { name: "Inventory", href: "/inventory", icon: Warehouse },
+  { name: "Promotions", href: "/promotions", icon: TicketPercent },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
@@ -66,6 +69,7 @@ export default function MobileSidebar({
 
           <button
             type="button"
+            aria-label="Close menu"
             onClick={onClose}
             className="flex h-9 w-9 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white"
           >
@@ -73,7 +77,7 @@ export default function MobileSidebar({
           </button>
         </div>
 
-        <nav className="flex-1 px-4 py-6">
+        <nav className="flex-1 overflow-y-auto px-4 py-6">
           <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-white/40">
             Main Menu
           </p>

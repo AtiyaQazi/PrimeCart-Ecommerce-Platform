@@ -1,7 +1,12 @@
+
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import CouponBox, {
+  type AppliedCoupon,
+} from "@/components/checkout/CouponBox";
+
 import {
   ArrowLeft,
   CheckCircle2,
@@ -42,7 +47,7 @@ function getProductImage(name?: string, image?: string) {
 }
 
 function formatPrice(price: number) {
-  return `Rs. ${price.toLocaleString("en-PK")}`;
+  return `Rs. ${Number(price || 0).toLocaleString("en-PK")}`;
 }
 
 export default function CheckoutPage() {
@@ -68,33 +73,58 @@ export default function CheckoutPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [success, setSuccess] = useState(false);
 
+  const [appliedCoupon, setAppliedCoupon] =
+    useState<AppliedCoupon | null>(null);
+
+  // LOAD CART
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     try {
-      const storedCart = localStorage.getItem("cart");
+      // Read the Store cart first, then fallback to old cart key.
+      const storedCart =
+        localStorage.getItem("med-store-cart") ||
+        localStorage.getItem("cart");
 
       if (storedCart) {
         const parsed = JSON.parse(storedCart);
 
         if (Array.isArray(parsed)) {
           setCartItems(parsed);
+        } else {
+          setCartItems([]);
         }
+      } else {
+        setCartItems([]);
       }
     } catch (error) {
       console.error("Unable to load cart:", error);
+      setCartItems([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const orderTotal = cartItems.reduce((total, item) => {
+  // SUBTOTAL
+  const subtotal = cartItems.reduce((total, item) => {
     const price = Number(item.price || 0);
     const quantity = Number(item.quantity || 1);
 
     return total + price * quantity;
   }, 0);
 
+  // COUPON DISCOUNT
+  const discount = appliedCoupon
+    ? Math.min(
+        Math.max(0, Number(appliedCoupon.discount) || 0),
+        subtotal
+      )
+    : 0;
+
+  // FINAL TOTAL
+  const orderTotal = Math.max(0, subtotal - discount);
+
+  // FORM VALIDATION
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
 
@@ -112,6 +142,12 @@ export default function CheckoutPage() {
 
     if (!phone.trim()) {
       newErrors.phone = "Please enter your phone number.";
+    } else if (
+      !/^(03\d{9}|\+923\d{9})$/.test(
+        phone.trim().replace(/[\s-]/g, "")
+      )
+    ) {
+      newErrors.phone = "Please enter a valid Pakistani phone number.";
     }
 
     if (!city.trim()) {
@@ -143,12 +179,11 @@ export default function CheckoutPage() {
     return Object.keys(newErrors).length === 0;
   };
 
+  // PLACE ORDER
   const handlePlaceOrder = async (event: FormEvent) => {
     event.preventDefault();
 
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
     if (cartItems.length === 0) {
       alert("Your cart is empty.");
@@ -175,16 +210,19 @@ export default function CheckoutPage() {
           image: getProductImage(item.name, item.image),
         })),
 
+        subtotal,
+        discount,
+        couponCode: appliedCoupon?.code || "",
+        couponName: appliedCoupon?.name || "",
         total: orderTotal,
 
         payment: {
           method: paymentMethod,
           status:
             paymentMethod === "online" ? "Paid" : "Pending",
+          amount: orderTotal,
           payerName:
-            paymentMethod === "online"
-              ? payerName.trim()
-              : "",
+            paymentMethod === "online" ? payerName.trim() : "",
           paymentNumber:
             paymentMethod === "online"
               ? paymentNumber.trim()
@@ -196,7 +234,6 @@ export default function CheckoutPage() {
         },
 
         status: "Processing",
-
         createdAt: new Date().toISOString(),
       };
 
@@ -214,7 +251,9 @@ export default function CheckoutPage() {
         JSON.stringify([newOrder, ...existingOrders])
       );
 
+      // Clear both cart keys after successful order placement.
       localStorage.removeItem("cart");
+      localStorage.removeItem("med-store-cart");
 
       setSuccess(true);
 
@@ -236,6 +275,7 @@ export default function CheckoutPage() {
         : "border-gray-200 focus:border-[#2F7D72] focus:ring-2 focus:ring-[#2F7D72]/10"
     }`;
 
+  // LOADING SCREEN
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#F2F8F6]">
@@ -246,6 +286,7 @@ export default function CheckoutPage() {
     );
   }
 
+  // SUCCESS SCREEN
   if (success) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#F2F8F6] px-4">
@@ -260,6 +301,25 @@ export default function CheckoutPage() {
             Your order has been placed successfully.
           </p>
 
+          <div className="mt-5 rounded-xl bg-[#F2F8F6] p-4 text-left">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Subtotal</span>
+              <span>{formatPrice(subtotal)}</span>
+            </div>
+
+            {discount > 0 && (
+              <div className="mt-2 flex justify-between text-sm text-green-600">
+                <span>Discount ({appliedCoupon?.code})</span>
+                <span>- {formatPrice(discount)}</span>
+              </div>
+            )}
+
+            <div className="mt-3 flex justify-between border-t border-gray-200 pt-3 font-bold text-[#183B38]">
+              <span>Paid / Payable</span>
+              <span>{formatPrice(orderTotal)}</span>
+            </div>
+          </div>
+
           <p className="mt-4 text-sm text-gray-400">
             Redirecting to your orders...
           </p>
@@ -271,7 +331,6 @@ export default function CheckoutPage() {
   return (
     <main className="min-h-screen bg-[#F2F8F6] px-4 py-8">
       <div className="mx-auto max-w-6xl">
-        {/* Back */}
         <button
           type="button"
           onClick={() => router.back()}
@@ -295,9 +354,8 @@ export default function CheckoutPage() {
           onSubmit={handlePlaceOrder}
           className="grid gap-6 lg:grid-cols-[1fr_380px]"
         >
-          {/* LEFT SIDE */}
           <div className="space-y-6">
-            {/* Delivery Information */}
+            {/* DELIVERY INFORMATION */}
             <section className="rounded-2xl bg-white p-6 shadow-sm">
               <div className="mb-6 flex items-center gap-3">
                 <div className="rounded-xl bg-[#2F7D72]/10 p-2">
@@ -316,7 +374,6 @@ export default function CheckoutPage() {
               </div>
 
               <div className="grid gap-5 sm:grid-cols-2">
-                {/* Full Name */}
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-gray-700">
                     Full Name
@@ -327,13 +384,10 @@ export default function CheckoutPage() {
                     value={fullName}
                     onChange={(e) => {
                       setFullName(e.target.value);
-
-                      if (errors.fullName) {
-                        setErrors((prev) => ({
-                          ...prev,
-                          fullName: "",
-                        }));
-                      }
+                      setErrors((prev) => ({
+                        ...prev,
+                        fullName: "",
+                      }));
                     }}
                     placeholder="Ayesha Khan"
                     className={inputClass("fullName")}
@@ -346,7 +400,6 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                {/* Email */}
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-gray-700">
                     Email
@@ -357,13 +410,10 @@ export default function CheckoutPage() {
                     value={email}
                     onChange={(e) => {
                       setEmail(e.target.value);
-
-                      if (errors.email) {
-                        setErrors((prev) => ({
-                          ...prev,
-                          email: "",
-                        }));
-                      }
+                      setErrors((prev) => ({
+                        ...prev,
+                        email: "",
+                      }));
                     }}
                     placeholder="ayesha.khan@gmail.com"
                     className={inputClass("email")}
@@ -376,7 +426,6 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                {/* Phone */}
                 <div>
                   <label className="mb-2 flex items-center gap-1 text-sm font-semibold text-gray-700">
                     <Phone className="h-4 w-4" />
@@ -388,13 +437,10 @@ export default function CheckoutPage() {
                     value={phone}
                     onChange={(e) => {
                       setPhone(e.target.value);
-
-                      if (errors.phone) {
-                        setErrors((prev) => ({
-                          ...prev,
-                          phone: "",
-                        }));
-                      }
+                      setErrors((prev) => ({
+                        ...prev,
+                        phone: "",
+                      }));
                     }}
                     placeholder="03001234567"
                     className={inputClass("phone")}
@@ -407,7 +453,6 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                {/* City */}
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-gray-700">
                     City
@@ -418,13 +463,10 @@ export default function CheckoutPage() {
                     value={city}
                     onChange={(e) => {
                       setCity(e.target.value);
-
-                      if (errors.city) {
-                        setErrors((prev) => ({
-                          ...prev,
-                          city: "",
-                        }));
-                      }
+                      setErrors((prev) => ({
+                        ...prev,
+                        city: "",
+                      }));
                     }}
                     placeholder="Sukkur"
                     className={inputClass("city")}
@@ -437,7 +479,6 @@ export default function CheckoutPage() {
                   )}
                 </div>
 
-                {/* Address */}
                 <div className="sm:col-span-2">
                   <label className="mb-2 block text-sm font-semibold text-gray-700">
                     Delivery Address
@@ -447,13 +488,10 @@ export default function CheckoutPage() {
                     value={address}
                     onChange={(e) => {
                       setAddress(e.target.value);
-
-                      if (errors.address) {
-                        setErrors((prev) => ({
-                          ...prev,
-                          address: "",
-                        }));
-                      }
+                      setErrors((prev) => ({
+                        ...prev,
+                        address: "",
+                      }));
                     }}
                     placeholder="House 25, Street 4, Sukkur, Sindh, Pakistan"
                     rows={4}
@@ -469,7 +507,7 @@ export default function CheckoutPage() {
               </div>
             </section>
 
-            {/* Payment Method */}
+            {/* PAYMENT METHOD */}
             <section className="rounded-2xl bg-white p-6 shadow-sm">
               <div className="mb-6 flex items-center gap-3">
                 <div className="rounded-xl bg-[#2F7D72]/10 p-2">
@@ -488,7 +526,6 @@ export default function CheckoutPage() {
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                {/* COD */}
                 <button
                   type="button"
                   onClick={() => {
@@ -518,7 +555,6 @@ export default function CheckoutPage() {
                   </div>
                 </button>
 
-                {/* Online Payment */}
                 <button
                   type="button"
                   onClick={() => {
@@ -549,7 +585,6 @@ export default function CheckoutPage() {
                 </button>
               </div>
 
-              {/* Online Payment Form */}
               {paymentMethod === "online" && (
                 <div className="mt-6 rounded-2xl border border-[#2F7D72]/20 bg-[#F2F8F6] p-5">
                   <div className="mb-5">
@@ -564,7 +599,6 @@ export default function CheckoutPage() {
                   </div>
 
                   <div className="space-y-5">
-                    {/* Payer Name */}
                     <div>
                       <label className="mb-2 block text-sm font-semibold text-gray-700">
                         Payer Name
@@ -575,13 +609,10 @@ export default function CheckoutPage() {
                         value={payerName}
                         onChange={(e) => {
                           setPayerName(e.target.value);
-
-                          if (errors.payerName) {
-                            setErrors((prev) => ({
-                              ...prev,
-                              payerName: "",
-                            }));
-                          }
+                          setErrors((prev) => ({
+                            ...prev,
+                            payerName: "",
+                          }));
                         }}
                         placeholder="Ayesha Khan"
                         className={inputClass("payerName")}
@@ -594,7 +625,6 @@ export default function CheckoutPage() {
                       )}
                     </div>
 
-                    {/* Payment Number */}
                     <div>
                       <label className="mb-2 block text-sm font-semibold text-gray-700">
                         Payment Number
@@ -605,19 +635,14 @@ export default function CheckoutPage() {
                         inputMode="numeric"
                         value={paymentNumber}
                         onChange={(e) => {
-                          const value = e.target.value.replace(
-                            /[^0-9+]/g,
-                            ""
+                          setPaymentNumber(
+                            e.target.value.replace(/[^0-9+]/g, "")
                           );
 
-                          setPaymentNumber(value);
-
-                          if (errors.paymentNumber) {
-                            setErrors((prev) => ({
-                              ...prev,
-                              paymentNumber: "",
-                            }));
-                          }
+                          setErrors((prev) => ({
+                            ...prev,
+                            paymentNumber: "",
+                          }));
                         }}
                         placeholder="03001234567"
                         className={inputClass("paymentNumber")}
@@ -630,7 +655,6 @@ export default function CheckoutPage() {
                       )}
                     </div>
 
-                    {/* Payment Amount */}
                     <div>
                       <label className="mb-2 block text-sm font-semibold text-gray-700">
                         Payment Amount
@@ -643,12 +667,10 @@ export default function CheckoutPage() {
                       </div>
 
                       <p className="mt-1 text-xs text-gray-400">
-                        The payment amount is automatically calculated
-                        from your order total.
+                        The payment amount includes your applied discount.
                       </p>
                     </div>
 
-                    {/* Transaction / Reference ID */}
                     <div>
                       <label className="mb-2 block text-sm font-semibold text-gray-700">
                         Transaction / Reference ID
@@ -659,13 +681,10 @@ export default function CheckoutPage() {
                         value={transactionId}
                         onChange={(e) => {
                           setTransactionId(e.target.value);
-
-                          if (errors.transactionId) {
-                            setErrors((prev) => ({
-                              ...prev,
-                              transactionId: "",
-                            }));
-                          }
+                          setErrors((prev) => ({
+                            ...prev,
+                            transactionId: "",
+                          }));
                         }}
                         placeholder="TXN-784521963"
                         className={inputClass("transactionId")}
@@ -678,7 +697,6 @@ export default function CheckoutPage() {
                       )}
                     </div>
 
-                    {/* Confirm Online Payment */}
                     <button
                       type="submit"
                       disabled={placingOrder}
@@ -693,21 +711,18 @@ export default function CheckoutPage() {
               )}
             </section>
 
-            {/* COD Button */}
             {paymentMethod === "cod" && (
               <button
                 type="submit"
                 disabled={placingOrder}
                 className="w-full rounded-xl bg-[#2F7D72] px-5 py-4 font-semibold text-white transition hover:bg-[#276B62] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {placingOrder
-                  ? "Placing Order..."
-                  : "Place Order"}
+                {placingOrder ? "Placing Order..." : "Place Order"}
               </button>
             )}
           </div>
 
-          {/* RIGHT SIDE - ORDER SUMMARY */}
+          {/* ORDER SUMMARY */}
           <aside className="h-fit rounded-2xl bg-white p-6 shadow-sm lg:sticky lg:top-6">
             <div className="mb-5 flex items-center gap-3">
               <div className="rounded-xl bg-[#2F7D72]/10 p-2">
@@ -726,16 +741,21 @@ export default function CheckoutPage() {
                 <p className="text-sm text-gray-500">
                   Your cart is empty.
                 </p>
+
+                <button
+                  type="button"
+                  onClick={() => router.push("/store")}
+                  className="mt-3 text-sm font-semibold text-[#2F7D72] hover:underline"
+                >
+                  Continue Shopping
+                </button>
               </div>
             ) : (
               <div className="space-y-4">
                 {cartItems.map((item, index) => {
                   const quantity = Number(item.quantity || 1);
                   const price = Number(item.price || 0);
-                  const image = getProductImage(
-                    item.name,
-                    item.image
-                  );
+                  const image = getProductImage(item.name, item.image);
 
                   return (
                     <div
@@ -774,8 +794,49 @@ export default function CheckoutPage() {
                   );
                 })}
 
+                {/* VOUCHER / COUPON SECTION */}
                 <div className="border-t border-gray-100 pt-4">
-                  <div className="flex items-center justify-between">
+                  <CouponBox
+                    subtotal={subtotal}
+                    appliedCoupon={appliedCoupon}
+                    onApply={setAppliedCoupon}
+                    onRemove={() => setAppliedCoupon(null)}
+                  />
+                </div>
+
+                {/* PRICE BREAKDOWN */}
+                <div className="space-y-3 border-t border-gray-100 pt-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">
+                      Subtotal
+                    </span>
+
+                    <span className="font-semibold text-gray-800">
+                      {formatPrice(subtotal)}
+                    </span>
+                  </div>
+
+                  {discount > 0 && (
+                    <>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-green-600">
+                          Discount ({appliedCoupon?.code})
+                        </span>
+
+                        <span className="font-semibold text-green-600">
+                          - {formatPrice(discount)}
+                        </span>
+                      </div>
+
+                      <div className="rounded-lg bg-green-50 px-3 py-2">
+                        <p className="text-xs font-medium text-green-700">
+                          You saved {formatPrice(discount)} on this order!
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="flex items-center justify-between border-t border-gray-100 pt-3">
                     <span className="font-semibold text-gray-600">
                       Total
                     </span>

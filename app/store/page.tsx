@@ -26,6 +26,9 @@ import {
 import { collection, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
+import CouponBox, {
+  type AppliedCoupon,
+} from "@/components/checkout/CouponBox";
 
 type Product = {
   id: string;
@@ -81,9 +84,7 @@ function isValidPakistanPhone(phone: string): boolean {
 function normalizePakistanPhone(phone: string): string {
   const value = String(phone || "").trim();
 
-  if (/^03\d{9}$/.test(value)) {
-    return value;
-  }
+  if (/^03\d{9}$/.test(value)) return value;
 
   if (/^\+923\d{9}$/.test(value)) {
     return `0${value.slice(3)}`;
@@ -112,7 +113,8 @@ function ibanMod97(value: string): number {
       : character;
 
     for (const digit of converted) {
-      remainder = (remainder * 10 + Number(digit)) % 97;
+      remainder =
+        (remainder * 10 + Number(digit)) % 97;
     }
   }
 
@@ -210,11 +212,14 @@ function normalizeProduct(
   id: string,
   data: Record<string, unknown>
 ): Product {
-  // Put the primary/legacy image first, then append all additional gallery images.
   const primaryImage = getProductImage(data);
+
   const images = Array.from(
-    new Set([primaryImage, ...getStringArray(data.images)].filter(Boolean))
+    new Set(
+      [primaryImage, ...getStringArray(data.images)].filter(Boolean)
+    )
   ).slice(0, 4);
+
   const price = Number(data.price ?? 0);
   const stock = Number(data.stock ?? 0);
 
@@ -291,6 +296,10 @@ export default function StorePage() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [customerEmail, setCustomerEmail] = useState("");
+
+  // Coupon state
+  const [appliedCoupon, setAppliedCoupon] =
+    useState<AppliedCoupon | null>(null);
 
   const [form, setForm] = useState<CustomerForm>({
     customerName: "",
@@ -490,6 +499,21 @@ export default function StorePage() {
     0
   );
 
+  // Recalculate percentage/fixed discount whenever subtotal changes.
+  const discount = appliedCoupon
+    ? Math.min(
+        subtotal,
+        Math.max(
+          0,
+          appliedCoupon.type === "percentage"
+            ? (subtotal * appliedCoupon.value) / 100
+            : appliedCoupon.value
+        )
+      )
+    : 0;
+
+  const finalTotal = Math.max(0, subtotal - discount);
+
   /* =========================================================
      CART ACTIONS
   ========================================================= */
@@ -649,7 +673,6 @@ export default function StorePage() {
       return;
     }
 
-    // Delivery phone is always a Pakistani mobile number.
     if (!isValidPakistanPhone(form.phone)) {
       setError(
         "Please enter a valid delivery mobile number: 03001234567 or +923001234567."
@@ -657,7 +680,6 @@ export default function StorePage() {
       return;
     }
 
-    // Validate the payment field according to the selected type.
     let normalizedPaymentNumber = "";
 
     if (form.paymentMethod === "Online") {
@@ -697,7 +719,7 @@ export default function StorePage() {
       }
     }
 
-    // Check the latest product stock before submitting the order.
+    // Check latest product stock before submitting.
     for (const item of cart) {
       const latest = products.find(
         (product) => product.id === item.id
@@ -710,6 +732,29 @@ export default function StorePage() {
         return;
       }
     }
+
+    // Recalculate amount before sending the order.
+    const orderSubtotal = cart.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+
+    const orderDiscount = appliedCoupon
+      ? Math.min(
+          orderSubtotal,
+          Math.max(
+            0,
+            appliedCoupon.type === "percentage"
+              ? (orderSubtotal * appliedCoupon.value) / 100
+              : appliedCoupon.value
+          )
+        )
+      : 0;
+
+    const orderTotal = Math.max(
+      0,
+      orderSubtotal - orderDiscount
+    );
 
     setSubmitting(true);
 
@@ -745,10 +790,17 @@ export default function StorePage() {
             selectedSize: item.selectedSize ?? "",
           })),
 
-          totalAmount: subtotal,
-          total: subtotal,
+          // Coupon and discounted order amounts
+          subtotal: orderSubtotal,
+          discount: orderDiscount,
+          couponCode: appliedCoupon?.code ?? "",
+          couponName: appliedCoupon?.name ?? "",
+          couponType: appliedCoupon?.type ?? "",
+          couponValue: appliedCoupon?.value ?? 0,
 
-          // Match the product details page's API fields.
+          totalAmount: orderTotal,
+          total: orderTotal,
+
           paymentMethod: form.paymentMethod,
           paymentType,
           paymentNumber: isOnline
@@ -762,7 +814,7 @@ export default function StorePage() {
             paymentNumber: isOnline
               ? normalizedPaymentNumber
               : "",
-            amount: subtotal,
+            amount: orderTotal,
             status: "Pending",
           },
 
@@ -782,8 +834,9 @@ export default function StorePage() {
         );
       }
 
-      // Clear the cart only after a successful API response.
+      // Clear cart and coupon only after successful order response.
       setCart([]);
+      setAppliedCoupon(null);
       setCheckoutOpen(false);
       setCartOpen(false);
 
@@ -1311,15 +1364,58 @@ export default function StorePage() {
                     </div>
                   ))}
                 </div>
+              </div>
 
-                <div className="mt-3 flex items-center justify-between border-t border-[#E4E2D8] pt-3">
+              {/* Coupon code */}
+              <CouponBox
+                subtotal={subtotal}
+                appliedCoupon={appliedCoupon}
+                onApply={(coupon) => {
+                  setAppliedCoupon(coupon);
+                  setError("");
+                }}
+                onRemove={() => {
+                  setAppliedCoupon(null);
+                  setError("");
+                }}
+              />
+
+              {/* Price breakdown */}
+              <div className="rounded-xl border border-[#E4E2D8] bg-white p-4">
+                <div className="flex items-center justify-between">
                   <span className="text-sm text-[#62665C]">
                     Subtotal
                   </span>
-                  <span className="text-lg font-bold text-[#315C43]">
+                  <span className="text-sm font-semibold">
                     {formatPrice(subtotal)}
                   </span>
                 </div>
+
+                {appliedCoupon && (
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <span className="text-sm text-green-700">
+                      Discount ({appliedCoupon.code})
+                    </span>
+                    <span className="text-sm font-bold text-green-700">
+                      - {formatPrice(discount)}
+                    </span>
+                  </div>
+                )}
+
+                <div className="mt-3 flex items-center justify-between border-t border-[#E4E2D8] pt-3">
+                  <span className="font-bold text-[#20251F]">
+                    Final Total
+                  </span>
+                  <span className="text-xl font-bold text-[#315C43]">
+                    {formatPrice(finalTotal)}
+                  </span>
+                </div>
+
+                {appliedCoupon && discount > 0 && (
+                  <p className="mt-2 text-xs font-medium text-green-700">
+                    You saved {formatPrice(discount)} with this coupon!
+                  </p>
+                )}
               </div>
 
               {/* Customer details */}
@@ -1529,14 +1625,14 @@ export default function StorePage() {
                 </div>
               )}
 
-              {/* Order total */}
+              {/* Final order total */}
               <div className="rounded-xl bg-[#EAE8DE] p-4">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-[#62665C]">
-                    Order Total
+                    Amount to Pay
                   </span>
-                  <span className="text-xl font-bold">
-                    {formatPrice(subtotal)}
+                  <span className="text-xl font-bold text-[#315C43]">
+                    {formatPrice(finalTotal)}
                   </span>
                 </div>
               </div>
